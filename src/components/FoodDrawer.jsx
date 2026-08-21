@@ -6,7 +6,6 @@ import {
   ClockCounterClockwise,
   Plus,
   Lightning,
-  Sparkle,
   Minus,
   Check,
   CircleNotch,
@@ -19,6 +18,8 @@ import {
   toggleFavoriteFood,
   getCustomFoods,
   saveCustomFood,
+  calculateNutrition,
+  searchFoods,
 } from "../services/foodService";
 
 export default function FoodDrawer({
@@ -37,12 +38,13 @@ export default function FoodDrawer({
   const [recents, setRecents] = useState([]);
   const [customFoods, setCustomFoods] = useState([]);
 
-  // Active Selected Food configuration state
+  // Selected Food State
   const [selectedFood, setSelectedFood] = useState(null);
   const [quantity, setQuantity] = useState(1);
-  const [servingUnit, setServingUnit] = useState("serving"); // 'serving' | '100g' | 'custom'
+  const [servingOption, setServingOption] = useState("default"); // 'default' | '100g'
+  const [customGrams, setCustomGrams] = useState("");
 
-  // Quick Add State
+  // Quick Add Form State
   const [quickName, setQuickName] = useState("");
   const [quickCalories, setQuickCalories] = useState("");
   const [quickProtein, setQuickProtein] = useState("");
@@ -51,13 +53,16 @@ export default function FoodDrawer({
 
   // Custom Food Form State
   const [customName, setCustomName] = useState("");
+  const [customHindiName, setCustomHindiName] = useState("");
   const [customUnit, setCustomUnit] = useState("serving");
-  const [customCalories, setCustomCalories] = useState("");
-  const [customProtein, setCustomProtein] = useState("");
-  const [customCarbs, setCustomCarbs] = useState("");
-  const [customFat, setCustomFat] = useState("");
+  const [customWeightG, setCustomWeightG] = useState("100");
+  const [customCalories100g, setCustomCalories100g] = useState("");
+  const [customProtein100g, setCustomProtein100g] = useState("");
+  const [customCarbs100g, setCustomCarbs100g] = useState("");
+  const [customFat100g, setCustomFat100g] = useState("");
+  const [customFiber100g, setCustomFiber100g] = useState("");
 
-  // Load initial catalog & local storage lists
+  // Load initial catalog and stored lists
   useEffect(() => {
     if (!isOpen) return;
 
@@ -65,23 +70,34 @@ export default function FoodDrawer({
     setRecents(getRecentFoods());
     setCustomFoods(getCustomFoods());
 
-    // If in edit mode, populate selected food directly
+    // If editing an existing log
     if (editingItem) {
+      const baseCal = (editingItem.calories || 0) / (editingItem.quantity || 1);
+      const baseP = (editingItem.protein || 0) / (editingItem.quantity || 1);
+      const baseC = (editingItem.carbs || 0) / (editingItem.quantity || 1);
+      const baseF = (editingItem.fats || 0) / (editingItem.quantity || 1);
+
       setSelectedFood({
         id: editingItem.food_id || editingItem.id,
-        dish_name: editingItem.dish_name,
-        calories_kcal: (editingItem.calories || 0) / (editingItem.quantity || 1),
-        protein_g: (editingItem.protein || 0) / (editingItem.quantity || 1),
-        carbs_g: (editingItem.carbs || 0) / (editingItem.quantity || 1),
-        fats_g: (editingItem.fats || 0) / (editingItem.quantity || 1),
+        name: editingItem.dish_name || editingItem.name,
+        default_serving_unit: "serving",
+        default_serving_weight_g: 100,
+        calories_per_100g: baseCal,
+        protein_per_100g: baseP,
+        carbs_per_100g: baseC,
+        fat_per_100g: baseF,
+        fiber_per_100g: 0,
       });
       setQuantity(editingItem.quantity || 1);
+      setServingOption("default");
       return;
     }
 
-    // Reset state for new entry
+    // Reset drawer state for new entry
     setSelectedFood(null);
     setQuantity(1);
+    setServingOption("default");
+    setCustomGrams("");
     setSearchQuery("");
     setTab("search");
 
@@ -100,39 +116,28 @@ export default function FoodDrawer({
     loadDatabase();
   }, [isOpen, editingItem]);
 
-  // Merge database foods and user custom foods for search
+  // Combined food list (custom + database)
   const allAvailableFoods = useMemo(() => {
-    const customList = customFoods.map((cf) => ({ ...cf, is_custom: true }));
-    return [...customList, ...foods];
+    return [...customFoods, ...foods];
   }, [foods, customFoods]);
 
-  // Filtered food list
+  // Search filtered foods using Unicode-safe matcher
   const filteredFoods = useMemo(() => {
-    if (!searchQuery.trim()) return allAvailableFoods.slice(0, 30);
-    const q = searchQuery.toLowerCase();
-    return allAvailableFoods
-      .filter((f) => f.dish_name.toLowerCase().includes(q))
-      .slice(0, 50);
+    return searchFoods(allAvailableFoods, searchQuery);
   }, [allAvailableFoods, searchQuery]);
 
-  // Scaled macros computation
-  const scaledMacros = useMemo(() => {
+  // Dynamic scaled nutrition calculation
+  const currentNutrition = useMemo(() => {
     if (!selectedFood) return null;
-    const q = Math.max(0.1, parseFloat(quantity) || 1);
-    const baseCal = selectedFood.calories_kcal || selectedFood.calories || 0;
-    const baseP = selectedFood.protein_g || selectedFood.protein || 0;
-    const baseC = selectedFood.carbs_g || selectedFood.carbs || 0;
-    const baseF = selectedFood.fats_g || selectedFood.fats || 0;
+    return calculateNutrition(
+      selectedFood,
+      quantity,
+      servingOption,
+      customGrams
+    );
+  }, [selectedFood, quantity, servingOption, customGrams]);
 
-    return {
-      calories: Math.round(baseCal * q),
-      protein: Math.round(baseP * q),
-      carbs: Math.round(baseC * q),
-      fats: Math.round(baseF * q),
-    };
-  }, [selectedFood, quantity]);
-
-  const handleToggleFavorite = (food, e) => {
+  const handleToggleFav = (food, e) => {
     if (e) e.stopPropagation();
     const updated = toggleFavoriteFood(food);
     setFavorites(updated);
@@ -141,19 +146,23 @@ export default function FoodDrawer({
   const handleSelectFood = (food) => {
     setSelectedFood(food);
     setQuantity(1);
+    setServingOption("default");
+    setCustomGrams("");
   };
 
   // Submit standard food log
   const handleConfirmLog = () => {
-    if (!selectedFood || !scaledMacros) return;
+    if (!selectedFood || !currentNutrition) return;
+
+    const foodDisplayName = selectedFood.name || selectedFood.dish_name;
 
     if (editingItem && onUpdateFood) {
       onUpdateFood(editingItem.id, {
         quantity: parseFloat(quantity) || 1,
-        calories: scaledMacros.calories,
-        protein: scaledMacros.protein,
-        carbs: scaledMacros.carbs,
-        fats: scaledMacros.fats,
+        calories: currentNutrition.calories,
+        protein: currentNutrition.protein,
+        carbs: currentNutrition.carbs,
+        fats: currentNutrition.fat,
       });
       onClose();
       return;
@@ -161,16 +170,21 @@ export default function FoodDrawer({
 
     const newLog = {
       food_id: selectedFood.id || null,
-      dish_name: selectedFood.dish_name,
+      dish_name: foodDisplayName,
       quantity: parseFloat(quantity) || 1,
-      calories: scaledMacros.calories,
-      protein: scaledMacros.protein,
-      carbs: scaledMacros.carbs,
-      fats: scaledMacros.fats,
+      calories: currentNutrition.calories,
+      protein: currentNutrition.protein,
+      carbs: currentNutrition.carbs,
+      fats: currentNutrition.fat,
       meal_type: mealType,
     };
 
-    saveRecentFood(newLog);
+    // Save full food object to recents
+    saveRecentFood({
+      ...selectedFood,
+      name: foodDisplayName,
+    });
+
     onAddFood(mealType, newLog);
     onClose();
   };
@@ -192,7 +206,15 @@ export default function FoodDrawer({
       meal_type: mealType,
     };
 
-    saveRecentFood(newLog);
+    saveRecentFood({
+      name: newLog.dish_name,
+      calories_per_100g: newLog.calories,
+      protein_per_100g: newLog.protein,
+      carbs_per_100g: newLog.carbs,
+      fat_per_100g: newLog.fats,
+      default_serving_weight_g: 100,
+    });
+
     onAddFood(mealType, newLog);
     onClose();
   };
@@ -200,20 +222,22 @@ export default function FoodDrawer({
   // Submit Create Custom Food
   const handleCreateCustomFood = (e) => {
     e.preventDefault();
-    if (!customName.trim() || !customCalories) return;
+    if (!customName.trim() || !customCalories100g) return;
 
     const created = saveCustomFood({
-      dish_name: customName.trim(),
-      calories_kcal: parseFloat(customCalories),
-      protein_g: parseFloat(customProtein) || 0,
-      carbs_g: parseFloat(customCarbs) || 0,
-      fats_g: parseFloat(customFat) || 0,
-      serving_unit: customUnit,
+      name: customName.trim(),
+      hindi_name: customHindiName.trim(),
+      default_serving_unit: customUnit.trim() || "serving",
+      default_serving_weight_g: Number(customWeightG) || 100,
+      calories_per_100g: parseFloat(customCalories100g) || 0,
+      protein_per_100g: parseFloat(customProtein100g) || 0,
+      carbs_per_100g: parseFloat(customCarbs100g) || 0,
+      fat_per_100g: parseFloat(customFat100g) || 0,
+      fiber_per_100g: parseFloat(customFiber100g) || 0,
     });
 
     if (created) {
       setCustomFoods(getCustomFoods());
-      // Directly select it for logging!
       setSelectedFood(created);
       setTab("search");
     }
@@ -229,7 +253,7 @@ export default function FoodDrawer({
         className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity animate-fade-in"
       />
 
-      {/* Drawer Container (Bottom Sheet on Mobile, Slide-Over on Desktop) */}
+      {/* Drawer Container */}
       <div className="relative w-full max-w-lg bg-white h-full max-h-[92vh] sm:max-h-full rounded-t-3xl sm:rounded-none sm:rounded-l-3xl shadow-2xl flex flex-col z-10 self-end sm:self-auto animate-slide-up sm:animate-none">
         {/* Header */}
         <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between">
@@ -250,11 +274,10 @@ export default function FoodDrawer({
           </button>
         </div>
 
-        {/* View Content: If Food Selected -> Quantity & Confirmation View */}
+        {/* View Content: Food Configuration & Amount Selection */}
         {selectedFood ? (
           <div className="flex-1 overflow-y-auto p-5 space-y-6 flex flex-col justify-between">
             <div className="space-y-6">
-              {/* Back to search if not in edit mode */}
               {!editingItem && (
                 <button
                   onClick={() => setSelectedFood(null)}
@@ -264,20 +287,28 @@ export default function FoodDrawer({
                 </button>
               )}
 
-              {/* Selected Food Hero */}
+              {/* Selected Food Card */}
               <div className="bg-slate-50 p-4 sm:p-5 rounded-2xl border border-slate-200/80">
                 <div className="flex items-start justify-between">
                   <div>
-                    <h3 className="text-lg font-bold text-slate-900">
-                      {selectedFood.dish_name}
+                    <h3 className="text-lg font-bold text-slate-900 leading-snug">
+                      {selectedFood.name || selectedFood.dish_name}
                     </h3>
-                    <div className="text-xs text-slate-500 mt-0.5">
-                      Base: {Math.round(selectedFood.calories_kcal || selectedFood.calories || 0)} kcal per serving
+                    {selectedFood.hindi_name && (
+                      <div className="text-sm font-medium text-slate-600 mt-0.5">
+                        {selectedFood.hindi_name}
+                      </div>
+                    )}
+                    <div className="text-xs text-slate-400 mt-1">
+                      Reference: {Math.round(selectedFood.calories_per_100g || 0)} kcal / 100g
+                      {selectedFood.default_serving_weight_g && (
+                        <span> · Default: 1 {selectedFood.default_serving_unit || "serving"} ≈ {selectedFood.default_serving_weight_g}g</span>
+                      )}
                     </div>
                   </div>
 
                   <button
-                    onClick={(e) => handleToggleFavorite(selectedFood, e)}
+                    onClick={(e) => handleToggleFav(selectedFood, e)}
                     className="p-2 rounded-xl text-amber-500 hover:bg-amber-50 transition cursor-pointer"
                   >
                     <Star
@@ -285,8 +316,8 @@ export default function FoodDrawer({
                       weight={
                         favorites.some(
                           (f) =>
-                            f.dish_name.toLowerCase() ===
-                            selectedFood.dish_name.toLowerCase()
+                            (f.name || f.dish_name || "").toLowerCase() ===
+                            (selectedFood.name || selectedFood.dish_name || "").toLowerCase()
                         )
                           ? "fill"
                           : "regular"
@@ -296,18 +327,19 @@ export default function FoodDrawer({
                 </div>
               </div>
 
-              {/* Amount & Unit Selector */}
+              {/* Amount & Serving Unit Selector */}
               <div className="space-y-4">
                 <label className="block text-xs font-bold uppercase tracking-wider text-slate-500">
                   Select Serving & Amount
                 </label>
 
                 <div className="flex items-center gap-3">
+                  {/* Quantity Stepper */}
                   <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
                     <button
                       type="button"
                       onClick={() =>
-                        setQuantity((q) => Math.max(0.5, Number((q - 0.5).toFixed(1))))
+                        setQuantity((q) => Math.max(0.25, Number((Number(q) - 0.5).toFixed(2))))
                       }
                       className="w-10 h-10 rounded-lg bg-white shadow-xs flex items-center justify-center text-slate-700 hover:bg-slate-50 transition cursor-pointer"
                     >
@@ -316,7 +348,7 @@ export default function FoodDrawer({
 
                     <input
                       type="number"
-                      step="0.1"
+                      step="0.25"
                       min="0.1"
                       value={quantity}
                       onChange={(e) => setQuantity(e.target.value)}
@@ -326,7 +358,7 @@ export default function FoodDrawer({
                     <button
                       type="button"
                       onClick={() =>
-                        setQuantity((q) => Number((Number(q) + 0.5).toFixed(1)))
+                        setQuantity((q) => Number((Number(q) + 0.5).toFixed(2)))
                       }
                       className="w-10 h-10 rounded-lg bg-white shadow-xs flex items-center justify-center text-slate-700 hover:bg-slate-50 transition cursor-pointer"
                     >
@@ -334,53 +366,64 @@ export default function FoodDrawer({
                     </button>
                   </div>
 
+                  {/* Serving Unit Dropdown */}
                   <div className="flex-1">
                     <select
-                      value={servingUnit}
-                      onChange={(e) => setServingUnit(e.target.value)}
+                      value={servingOption}
+                      onChange={(e) => setServingOption(e.target.value)}
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-3 text-sm font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-emerald-500/20"
                     >
-                      <option value="serving">Serving(s)</option>
-                      <option value="bowl">Bowl / Plate</option>
-                      <option value="piece">Piece / Item</option>
-                      <option value="cup">Cup / Glass</option>
-                      <option value="100g">100 Grams</option>
+                      <option value="default">
+                        1 {selectedFood.default_serving_unit || "serving"} (≈ {selectedFood.default_serving_weight_g || 100}g)
+                      </option>
+                      <option value="100g">100 Grams (100g)</option>
                     </select>
                   </div>
                 </div>
               </div>
 
-              {/* Calculated Real-time Macros Preview */}
-              {scaledMacros && (
+              {/* Calculated Real-Time Nutrition Preview */}
+              {currentNutrition && (
                 <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-2xl p-4 space-y-3">
                   <div className="flex justify-between items-baseline">
-                    <span className="text-xs font-bold uppercase tracking-wider text-emerald-800">
-                      Total Energy & Nutrition
-                    </span>
+                    <div>
+                      <span className="text-xs font-bold uppercase tracking-wider text-emerald-800 block">
+                        Total Energy & Nutrition
+                      </span>
+                      <span className="text-xs text-emerald-700 font-medium">
+                        Weight: ~{currentNutrition.weightGrams}g
+                      </span>
+                    </div>
                     <span className="text-2xl font-black text-emerald-900">
-                      {scaledMacros.calories} <span className="text-xs font-normal text-emerald-700">kcal</span>
+                      {currentNutrition.calories} <span className="text-xs font-normal text-emerald-700">kcal</span>
                     </span>
                   </div>
 
                   <div className="grid grid-cols-3 gap-2 text-center text-xs">
                     <div className="bg-white/80 rounded-xl p-2.5 border border-emerald-100">
                       <span className="text-blue-600 font-semibold block text-[11px]">Protein</span>
-                      <span className="font-extrabold text-sm text-slate-900">{scaledMacros.protein}g</span>
+                      <span className="font-extrabold text-sm text-slate-900">{currentNutrition.protein}g</span>
                     </div>
                     <div className="bg-white/80 rounded-xl p-2.5 border border-emerald-100">
                       <span className="text-amber-600 font-semibold block text-[11px]">Carbs</span>
-                      <span className="font-extrabold text-sm text-slate-900">{scaledMacros.carbs}g</span>
+                      <span className="font-extrabold text-sm text-slate-900">{currentNutrition.carbs}g</span>
                     </div>
                     <div className="bg-white/80 rounded-xl p-2.5 border border-emerald-100">
                       <span className="text-rose-600 font-semibold block text-[11px]">Fats</span>
-                      <span className="font-extrabold text-sm text-slate-900">{scaledMacros.fats}g</span>
+                      <span className="font-extrabold text-sm text-slate-900">{currentNutrition.fat}g</span>
                     </div>
                   </div>
+
+                  {currentNutrition.fiber > 0 && (
+                    <div className="text-right text-[11px] font-medium text-emerald-700">
+                      Fiber: {currentNutrition.fiber}g
+                    </div>
+                  )}
                 </div>
               )}
             </div>
 
-            {/* Confirm Log Button */}
+            {/* Confirm Log CTA */}
             <button
               onClick={handleConfirmLog}
               className="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white py-3.5 rounded-xl font-bold text-sm shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer mt-4"
@@ -389,14 +432,14 @@ export default function FoodDrawer({
               <span>
                 {editingItem
                   ? "Update Food Log"
-                  : `Log to ${mealType.charAt(0).toUpperCase() + mealType.slice(1)} (${scaledMacros?.calories} kcal)`}
+                  : `Log to ${mealType.charAt(0).toUpperCase() + mealType.slice(1)} (${currentNutrition?.calories} kcal)`}
               </span>
             </button>
           </div>
         ) : (
-          /* Main Navigation Tabs & Lists */
+          /* Main Drawer Tabs & Lists */
           <div className="flex-1 flex flex-col overflow-hidden">
-            {/* Tabs */}
+            {/* Tabs Bar */}
             <div className="grid grid-cols-4 p-2 bg-slate-50 border-b border-slate-100 text-xs font-semibold text-slate-500">
               <button
                 onClick={() => setTab("search")}
@@ -458,7 +501,7 @@ export default function FoodDrawer({
                   />
                   <input
                     type="text"
-                    placeholder="Search e.g. Oatmeal, Chicken, Rice..."
+                    placeholder="Search e.g. Dal, Roti, Rice, पनीर..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
@@ -483,13 +526,15 @@ export default function FoodDrawer({
                     </div>
                   ) : filteredFoods.length > 0 ? (
                     filteredFoods.map((food) => {
+                      const foodName = food.name || food.dish_name || "";
                       const isFav = favorites.some(
                         (f) =>
-                          f.dish_name.toLowerCase() ===
-                          food.dish_name.toLowerCase()
+                          (f.name || f.dish_name || "").toLowerCase() ===
+                          foodName.toLowerCase()
                       );
-                      const cal = Math.round(food.calories_kcal || food.calories || 0);
-                      const p = Math.round(food.protein_g || food.protein || 0);
+
+                      // Calculate 1 default serving nutrition
+                      const servingNut = calculateNutrition(food, 1, "default");
 
                       return (
                         <div
@@ -498,10 +543,15 @@ export default function FoodDrawer({
                           className="py-3 px-2 flex items-center justify-between hover:bg-slate-50 rounded-xl cursor-pointer transition group"
                         >
                           <div className="flex-1 min-w-0 pr-3">
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-sm font-semibold text-slate-800 group-hover:text-emerald-700 transition truncate">
-                                {food.dish_name}
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-sm font-semibold text-slate-800 group-hover:text-emerald-700 transition">
+                                {foodName}
                               </span>
+                              {food.hindi_name && (
+                                <span className="text-xs text-slate-400 font-medium">
+                                  ({food.hindi_name})
+                                </span>
+                              )}
                               {food.is_custom && (
                                 <span className="bg-emerald-50 text-emerald-700 text-[10px] font-bold px-1.5 py-0.5 rounded">
                                   Custom
@@ -509,13 +559,13 @@ export default function FoodDrawer({
                               )}
                             </div>
                             <div className="text-xs text-slate-400 mt-0.5">
-                              {cal} kcal · {p}g protein
+                              {servingNut.calories} kcal · per {food.default_serving_unit || "serving"} ({servingNut.defaultWeightG}g) · {servingNut.protein}g P · {servingNut.carbs}g C · {servingNut.fat}g F
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 shrink-0">
                             <button
-                              onClick={(e) => handleToggleFavorite(food, e)}
+                              onClick={(e) => handleToggleFav(food, e)}
                               className="p-1.5 text-slate-300 hover:text-amber-500 transition"
                             >
                               <Star
@@ -559,25 +609,33 @@ export default function FoodDrawer({
                       <span>Favorites ({favorites.length})</span>
                     </h3>
                     <div className="divide-y divide-slate-100 bg-white rounded-xl border border-slate-100">
-                      {favorites.map((food) => (
-                        <div
-                          key={food.id}
-                          onClick={() => handleSelectFood(food)}
-                          className="p-3 flex items-center justify-between hover:bg-slate-50 cursor-pointer transition"
-                        >
-                          <div>
-                            <span className="text-sm font-semibold text-slate-800">
-                              {food.dish_name}
-                            </span>
-                            <span className="text-xs text-slate-400 block">
-                              {Math.round(food.calories_kcal || food.calories || 0)} kcal
+                      {favorites.map((food) => {
+                        const servingNut = calculateNutrition(food, 1, "default");
+                        return (
+                          <div
+                            key={food.id}
+                            onClick={() => handleSelectFood(food)}
+                            className="p-3 flex items-center justify-between hover:bg-slate-50 cursor-pointer transition"
+                          >
+                            <div>
+                              <span className="text-sm font-semibold text-slate-800">
+                                {food.name || food.dish_name}
+                              </span>
+                              {food.hindi_name && (
+                                <span className="text-xs text-slate-400 ml-1.5">
+                                  ({food.hindi_name})
+                                </span>
+                              )}
+                              <span className="text-xs text-slate-400 block mt-0.5">
+                                {servingNut.calories} kcal · 1 {food.default_serving_unit || "serving"}
+                              </span>
+                            </div>
+                            <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-lg">
+                              + Log
                             </span>
                           </div>
-                          <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-lg">
-                            + Log
-                          </span>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -589,25 +647,33 @@ export default function FoodDrawer({
                   </h3>
                   {recents.length > 0 ? (
                     <div className="divide-y divide-slate-100 bg-white rounded-xl border border-slate-100">
-                      {recents.map((food, i) => (
-                        <div
-                          key={`${food.id}_${i}`}
-                          onClick={() => handleSelectFood(food)}
-                          className="p-3 flex items-center justify-between hover:bg-slate-50 cursor-pointer transition"
-                        >
-                          <div>
-                            <span className="text-sm font-semibold text-slate-800">
-                              {food.dish_name}
-                            </span>
-                            <span className="text-xs text-slate-400 block">
-                              {Math.round(food.calories_kcal || food.calories || 0)} kcal
+                      {recents.map((food, i) => {
+                        const servingNut = calculateNutrition(food, 1, "default");
+                        return (
+                          <div
+                            key={`${food.id}_${i}`}
+                            onClick={() => handleSelectFood(food)}
+                            className="p-3 flex items-center justify-between hover:bg-slate-50 cursor-pointer transition"
+                          >
+                            <div>
+                              <span className="text-sm font-semibold text-slate-800">
+                                {food.name || food.dish_name}
+                              </span>
+                              {food.hindi_name && (
+                                <span className="text-xs text-slate-400 ml-1.5">
+                                  ({food.hindi_name})
+                                </span>
+                              )}
+                              <span className="text-xs text-slate-400 block mt-0.5">
+                                {servingNut.calories} kcal · 1 {food.default_serving_unit || "serving"}
+                              </span>
+                            </div>
+                            <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-lg">
+                              + Log
                             </span>
                           </div>
-                          <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-lg">
-                            + Log
-                          </span>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ) : (
                     <div className="text-center py-8 text-xs text-slate-400">
@@ -710,16 +776,16 @@ export default function FoodDrawer({
             {tab === "custom" && (
               <form onSubmit={handleCreateCustomFood} className="p-5 space-y-4 overflow-y-auto">
                 <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-2xl p-4 text-xs text-emerald-800 leading-relaxed">
-                  🥗 <strong>Custom Food:</strong> Save a recipe or specialty product to your library for easy reuse.
+                  🥗 <strong>Custom Food:</strong> Save a recipe or specialty product to your library per 100g reference.
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1.5">
-                    Food Name *
+                    Food Name (English / Hindi) *
                   </label>
                   <input
                     type="text"
-                    placeholder="e.g. Homemade Granola"
+                    placeholder="e.g. Homemade Poha"
                     value={customName}
                     onChange={(e) => setCustomName(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-emerald-500/20"
@@ -727,40 +793,64 @@ export default function FoodDrawer({
                   />
                 </div>
 
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1.5">
+                    Regional / Hindi Name (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. पोहा"
+                    value={customHindiName}
+                    onChange={(e) => setCustomHindiName(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-emerald-500/20"
+                  />
+                </div>
+
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1.5">
-                      Calories / Unit *
+                      Default Serving Unit
                     </label>
                     <input
-                      type="number"
-                      min="1"
-                      placeholder="e.g. 240"
-                      value={customCalories}
-                      onChange={(e) => setCustomCalories(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-emerald-500/20 font-bold"
-                      required
+                      type="text"
+                      placeholder="e.g. katori, cup, plate, piece"
+                      value={customUnit}
+                      onChange={(e) => setCustomUnit(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-800 outline-none"
                     />
                   </div>
 
                   <div>
                     <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1.5">
-                      Serving Unit
+                      Serving Weight (g)
                     </label>
-                    <select
-                      value={customUnit}
-                      onChange={(e) => setCustomUnit(e.target.value)}
+                    <input
+                      type="number"
+                      min="1"
+                      placeholder="e.g. 150"
+                      value={customWeightG}
+                      onChange={(e) => setCustomWeightG(e.target.value)}
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-800 outline-none"
-                    >
-                      <option value="serving">Serving</option>
-                      <option value="100g">100g</option>
-                      <option value="bowl">Bowl</option>
-                      <option value="piece">Piece</option>
-                    </select>
+                    />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1.5">
+                    Calories per 100g *
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="e.g. 160"
+                    value={customCalories100g}
+                    onChange={(e) => setCustomCalories100g(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-emerald-500/20 font-bold"
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-4 gap-2">
                   <div>
                     <label className="block text-xs font-semibold text-blue-600 mb-1">
                       Protein (g)
@@ -768,10 +858,11 @@ export default function FoodDrawer({
                     <input
                       type="number"
                       min="0"
+                      step="0.1"
                       placeholder="0"
-                      value={customProtein}
-                      onChange={(e) => setCustomProtein(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 outline-none"
+                      value={customProtein100g}
+                      onChange={(e) => setCustomProtein100g(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-sm text-slate-800 outline-none"
                     />
                   </div>
                   <div>
@@ -781,10 +872,11 @@ export default function FoodDrawer({
                     <input
                       type="number"
                       min="0"
+                      step="0.1"
                       placeholder="0"
-                      value={customCarbs}
-                      onChange={(e) => setCustomCarbs(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 outline-none"
+                      value={customCarbs100g}
+                      onChange={(e) => setCustomCarbs100g(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-sm text-slate-800 outline-none"
                     />
                   </div>
                   <div>
@@ -794,17 +886,32 @@ export default function FoodDrawer({
                     <input
                       type="number"
                       min="0"
+                      step="0.1"
                       placeholder="0"
-                      value={customFat}
-                      onChange={(e) => setCustomFat(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 outline-none"
+                      value={customFat100g}
+                      onChange={(e) => setCustomFat100g(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-sm text-slate-800 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-emerald-600 mb-1">
+                      Fiber (g)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      placeholder="0"
+                      value={customFiber100g}
+                      onChange={(e) => setCustomFiber100g(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-sm text-slate-800 outline-none"
                     />
                   </div>
                 </div>
 
                 <button
                   type="submit"
-                  disabled={!customName.trim() || !customCalories}
+                  disabled={!customName.trim() || !customCalories100g}
                   className="w-full mt-4 bg-emerald-600 hover:bg-emerald-700 text-white py-3.5 rounded-xl font-bold text-sm shadow-xs transition-all cursor-pointer disabled:opacity-50"
                 >
                   Save to My Foods & Log
