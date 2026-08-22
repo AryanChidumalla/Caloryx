@@ -2,21 +2,26 @@ import { supabase } from "../../services/supabaseClient";
 import {
   setUser,
   logout,
-  setProfileComplete,
   setLoading,
+  setProfileComplete,
   setProfileData,
 } from "./authSlice";
 
 export const initAuthListener = (dispatch) => {
-  dispatch(setLoading(true));
+  let active = true;
+  let initialized = false;
 
-  // Function to handle the profile check logic
   const handleAuthAction = async (session) => {
+    if (!active) return;
+
+    dispatch(setLoading(true));
+
     const currentUser = session?.user ?? null;
 
     if (!currentUser) {
+      if (!active) return;
+
       dispatch(logout());
-      dispatch(setLoading(false));
       return;
     }
 
@@ -29,35 +34,60 @@ export const initAuthListener = (dispatch) => {
         .eq("id", currentUser.id)
         .maybeSingle();
 
-      dispatch(setProfileComplete(!!data?.target_calorie));
+      if (!active) return;
+
+      if (error) {
+        console.error("Profile fetch error:", error);
+        dispatch(setProfileComplete(false));
+        return;
+      }
+
+      console.log("PROFILE FROM SUPABASE:", data);
+      console.log("TARGET CALORIE:", data?.target_calorie);
+      console.log("PROFILE COMPLETE:", !!data?.target_calorie);
 
       if (data) {
-        dispatch(setProfileData(data)); // Now the stats are in Redux!
+        // setProfileData already updates isProfileComplete
+        dispatch(setProfileData(data));
+      } else {
+        dispatch(setProfileComplete(false));
       }
     } catch (err) {
+      if (!active) return;
+
       console.error("Profile check error:", err);
+      dispatch(setProfileComplete(false));
     } finally {
-      // THIS MUST FIRE NO MATTER WHAT
-      dispatch(setLoading(false));
+      if (active) {
+        dispatch(setLoading(false));
+      }
     }
   };
 
-  // 1. Check existing session immediately (for refresh)
+  // Initial session check
   supabase.auth.getSession().then(({ data: { session } }) => {
-    if (session) {
-      handleAuthAction(session);
-    } else {
-      // If no session, stop loading so user can see AuthPage
-      dispatch(setLoading(false));
-    }
-  });
+    if (!active) return;
 
-  // 2. Listen for future changes (login/logout)
-  const {
-    data: { subscription },
-  } = supabase.auth.onAuthStateChange((_event, session) => {
+    initialized = true;
     handleAuthAction(session);
   });
 
-  return subscription;
+  // Future login/logout changes
+  const {
+    data: { subscription },
+  } = supabase.auth.onAuthStateChange((_event, session) => {
+    if (!active) return;
+
+    // Don't duplicate the initial getSession() check
+    if (!initialized) return;
+
+    handleAuthAction(session);
+  });
+
+  return {
+    unsubscribe: () => {
+      active = false;
+      subscription.unsubscribe();
+    },
+  };
 };
