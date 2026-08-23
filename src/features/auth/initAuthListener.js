@@ -42,10 +42,6 @@ export const initAuthListener = (dispatch) => {
         return;
       }
 
-      console.log("PROFILE FROM SUPABASE:", data);
-      console.log("TARGET CALORIE:", data?.target_calorie);
-      console.log("PROFILE COMPLETE:", !!data?.target_calorie);
-
       if (data) {
         // setProfileData already updates isProfileComplete
         dispatch(setProfileData(data));
